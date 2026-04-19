@@ -72,10 +72,8 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="login"
         options={{
-          title: "Login",
-          tabBarIcon: ({ color, size }) => (
-            <TabIcon name="person-outline" color={color} size={size} />
-          ),
+          href: null,
+          tabBarStyle: { display: "none" },
         }}
       />
     </Tabs>

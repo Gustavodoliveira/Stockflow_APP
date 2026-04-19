@@ -1,10 +1,46 @@
 import Input from "@/components/input";
+import { saveAuth } from "@/services/auth";
+import { login } from "@/services/UserApi";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
-import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useRouter } from "expo-router";
+import { useState } from "react";
+import {
+  Alert,
+  Image,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 export default function LoginScreen() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const router = useRouter();
+
+  async function handleLogin() {
+    if (!email || !password) {
+      Alert.alert("Atenção", "Preencha e-mail e senha.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await login({ email, password });
+      await saveAuth(response.token, response.user);
+      router.replace("/(tabs)");
+    } catch (error: any) {
+      const message =
+        error?.response?.data?.message ?? "Erro ao realizar login.";
+      Alert.alert("Erro", message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <LinearGradient
       colors={["#0a0a1a", "#0d0d3b", "#1a0a4a", "#2d0a6e", "#1a3a8a"]}
@@ -30,12 +66,16 @@ export default function LoginScreen() {
               placeholder="E-mail"
               keyboardType="email-address"
               autoCapitalize="none"
+              value={email}
+              onChangeText={setEmail}
               icon={<Ionicons name="mail-outline" size={18} color="#4a6aaa" />}
             />
 
             <Input
               placeholder="Senha"
               secureTextEntry
+              value={password}
+              onChangeText={setPassword}
               icon={
                 <Ionicons
                   name="lock-closed-outline"
@@ -49,14 +89,21 @@ export default function LoginScreen() {
               <Text style={styles.forgotPasswordText}>Esqueceu a senha?</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.button} activeOpacity={0.8}>
+            <TouchableOpacity
+              style={styles.button}
+              activeOpacity={0.8}
+              onPress={handleLogin}
+              disabled={loading}
+            >
               <LinearGradient
                 colors={["#1a4aaa", "#5a2aaa", "#1a3a8a"]}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={styles.buttonGradient}
               >
-                <Text style={styles.buttonText}>Entrar</Text>
+                <Text style={styles.buttonText}>
+                  {loading ? "Entrando..." : "Entrar"}
+                </Text>
               </LinearGradient>
             </TouchableOpacity>
           </View>
