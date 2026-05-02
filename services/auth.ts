@@ -1,3 +1,16 @@
+// Função para decodificar e checar expiração do token JWT
+export function isTokenExpired(token: string): boolean {
+  try {
+    const [, payload] = token.split(".");
+    if (!payload) return true;
+    const decoded = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
+    if (!decoded.exp) return true;
+    const now = Math.floor(Date.now() / 1000);
+    return decoded.exp < now;
+  } catch {
+    return true;
+  }
+}
 import * as SecureStore from "expo-secure-store";
 import { UserResponse } from "./UserApi";
 

@@ -1,3 +1,10 @@
+export interface UserListItem {
+  id: string; // UUID
+  name: string;
+  email: string;
+  role: string;
+  enabled: boolean;
+}
 import { api } from "./api";
 
 export interface UserResponse {
@@ -23,5 +30,11 @@ export interface LoginRequest {
 export function login(login: LoginRequest): Promise<CreateUserWithTokenResponse> {
   return api.post("/users/login", login).then((response) => {
     return response.data as CreateUserWithTokenResponse;
+  });
+}
+
+export function getAllUsers(): Promise<UserListItem[]> {
+  return api.get("/users/getAll").then((response) => {
+    return response.data as UserListItem[];
   });
 }

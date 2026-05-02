@@ -1,4 +1,4 @@
-import { getToken } from "@/services/auth";
+import { clearAuth, getToken, isTokenExpired } from "@/services/auth";
 import { Slot, useRouter, useSegments } from "expo-router";
 import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
@@ -10,24 +10,29 @@ function AuthGuard() {
   const [checked, setChecked] = useState(false);
 
   useEffect(() => {
+    let isMounted = true;
     async function check() {
       const token = await getToken();
       const inLogin = segments[1] === "login";
 
-      if (!token && !inLogin) {
-        router.replace("/(tabs)/login");
-      } else if (token && inLogin) {
+      if (!token || isTokenExpired(token)) {
+        await clearAuth();
+        if (!inLogin) router.replace("/(tabs)/login");
+        if (isMounted) setChecked(true);
+        return;
+      }
+      if (token && inLogin) {
         router.replace("/(tabs)");
       }
-
-      setChecked(true);
+      if (isMounted) setChecked(true);
     }
-
     check();
-  }, []);
+    return () => {
+      isMounted = false;
+    };
+  }, [segments]);
 
   if (!checked) return null;
-
   return <Slot />;
 }
 
