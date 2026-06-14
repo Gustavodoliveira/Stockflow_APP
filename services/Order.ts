@@ -49,3 +49,12 @@ export interface ExternalOrderItem {
 export function sincOrder(): Promise<SincOrder[]> {
   return api.post("/orders/sync", ).then((res) => res.data as SincOrder[]);
 }
+
+export function setUserInOrder(orderId: string, userId: string): Promise<void> {
+  console.log(`Associando usuário ${userId} ao pedido ${orderId}`);
+  return api.patch(`/orders/${orderId}/separador`, { userId }).then(() => {});
+}
+
+export function getRawOrder(orderId: string): Promise<SincOrder> {
+  return api.get(`/orders/${orderId}`).then((res) => res.data as SincOrder);
+}

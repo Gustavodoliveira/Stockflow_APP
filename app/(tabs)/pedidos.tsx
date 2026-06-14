@@ -1,7 +1,9 @@
-import { sincOrder, SincOrder } from "@/services/Order";
+import { setUserInOrder, sincOrder, SincOrder } from "@/services/Order";
 import { getAllUsers, UserListItem } from "@/services/UserApi";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { LinearGradient } from "expo-linear-gradient";
-import React, { useState } from "react";
+import { useRouter } from "expo-router";
+import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -17,24 +19,59 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Button } from "../../components/button";
 
 export default function PedidosScreen() {
+  const CACHE_KEY = "@pedidos_cache";
+  const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [pedidos, setPedidos] = useState<SincOrder[]>([]);
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function loadCache() {
+      try {
+        const cached = await AsyncStorage.getItem(CACHE_KEY);
+        if (cached) {
+          const list: SincOrder[] = JSON.parse(cached);
+          setPedidos(list);
+          initSeparadores(list);
+        }
+      } catch {}
+    }
+    async function loadUsers() {
+      try {
+        const result = await getAllUsers();
+        setUsers(result);
+      } catch {}
+    }
+    loadCache();
+    loadUsers();
+  }, []);
+  const [separadores, setSeparadores] = useState<Record<string, string>>({});
   const [users, setUsers] = useState<UserListItem[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [pedidoIdToSetUser, setPedidoIdToSetUser] = useState<string | null>(
     null,
   );
+  const [confirmModalVisible, setConfirmModalVisible] = useState(false);
+  const [tempSelectedUser, setTempSelectedUser] = useState<UserListItem | null>(
+    null,
+  );
+
+  function initSeparadores(list: SincOrder[]) {
+    const map: Record<string, string> = {};
+    list.forEach((p) => {
+      if (p.userId) map[p.id] = p.userId;
+    });
+    setSeparadores(map);
+  }
 
   async function handleSync() {
     setLoading(true);
     try {
       const result = await sincOrder();
-      console.log("Resposta da API de pedidos:", result);
       setPedidos(result);
+      initSeparadores(result);
+      await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(result));
     } catch (e) {
-      setPedidos([]);
       console.log("Erro ao sincronizar pedidos:", e);
     } finally {
       setLoading(false);
@@ -55,8 +92,46 @@ export default function PedidosScreen() {
   }
 
   function handleUserSelect(userId: string) {
-    setSelectedUserId(userId);
+    const user = users.find((u) => u.id === userId) ?? null;
+    setTempSelectedUser(user);
     setModalVisible(false);
+    setConfirmModalVisible(true);
+  }
+
+  async function handleConfirmSave() {
+    if (tempSelectedUser && pedidoIdToSetUser) {
+      console.log(
+        "Salvando separador — orderId:",
+        pedidoIdToSetUser,
+        "| userId:",
+        tempSelectedUser.id,
+      );
+      try {
+        await setUserInOrder(pedidoIdToSetUser, tempSelectedUser.id);
+        setSeparadores((prev) => ({
+          ...prev,
+          [pedidoIdToSetUser]: tempSelectedUser.id,
+        }));
+        // Atualiza pedidos em memória e cache para persistir o separador
+        const updatedPedidos = pedidos.map((p) =>
+          p.id === pedidoIdToSetUser
+            ? { ...p, userId: tempSelectedUser.id }
+            : p,
+        );
+        setPedidos(updatedPedidos);
+        await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(updatedPedidos));
+        console.log("Separador salvo com sucesso.");
+      } catch (e) {
+        console.log("Erro ao salvar separador:", e);
+      }
+    }
+    setTempSelectedUser(null);
+    setConfirmModalVisible(false);
+  }
+
+  function handleConfirmDelete() {
+    setTempSelectedUser(null);
+    setConfirmModalVisible(false);
   }
 
   function getUserNameById(userId: string | null) {
@@ -96,26 +171,31 @@ export default function PedidosScreen() {
             style={styles.list}
             renderItem={({ item }) => (
               <View style={styles.card}>
-                <Text style={styles.cardTitle}>
-                  Pedido: {item.numeroPedido}
-                </Text>
-                <Text style={styles.cardSub}>
-                  Cliente: {item.nomeCliente || "-"}
-                </Text>
                 <TouchableOpacity
-                  style={styles.userIdButton}
+                  onPress={() => router.push(`/pedido/${item.id}`)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.cardTitle}>
+                    Pedido: {item.numeroPedido}
+                  </Text>
+                  <Text style={styles.cardSub}>
+                    Cliente: {item.nomeCliente || "-"}
+                  </Text>
+                  <Text style={styles.cardSub}>
+                    Status: {item.status || "-"}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.userIdButton,
+                    separadores[item.id] ? styles.userIdSelected : null,
+                  ]}
                   onPress={() => openUserSelect(item.id)}
                 >
-                  <Text
-                    style={[
-                      styles.cardSub,
-                      styles.userIdText,
-                      selectedUserId && styles.userIdSelected,
-                    ]}
-                  >
-                    {selectedUserId && users.length > 0
-                      ? `Usuário: ${getUserNameById(selectedUserId)}`
-                      : `Selecionar usuário`}
+                  <Text style={styles.userIdText}>
+                    {separadores[item.id]
+                      ? `Separador: ${getUserNameById(separadores[item.id])}`
+                      : "Selecionar Separador"}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -147,7 +227,8 @@ export default function PedidosScreen() {
                         key={user.id}
                         style={[
                           styles.userOption,
-                          selectedUserId === user.id &&
+                          pedidoIdToSetUser &&
+                            separadores[pedidoIdToSetUser] === user.id &&
                             styles.userOptionSelected,
                         ]}
                         onPress={() => handleUserSelect(user.id)}
@@ -155,7 +236,8 @@ export default function PedidosScreen() {
                         <Text
                           style={[
                             styles.userOptionText,
-                            selectedUserId === user.id &&
+                            pedidoIdToSetUser &&
+                              separadores[pedidoIdToSetUser] === user.id &&
                               styles.userOptionTextSelected,
                           ]}
                         >
@@ -171,6 +253,39 @@ export default function PedidosScreen() {
                 >
                   <Text style={styles.closeModalText}>Cancelar</Text>
                 </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
+
+          <Modal
+            visible={confirmModalVisible}
+            transparent
+            animationType="fade"
+            onRequestClose={handleConfirmDelete}
+          >
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContainer}>
+                <Text style={styles.modalTitle}>Confirmar Separador</Text>
+                <Text style={styles.confirmText}>
+                  {tempSelectedUser?.name ?? "-"}
+                </Text>
+                <Text style={styles.confirmSub}>
+                  Deseja salvar este separador para o pedido?
+                </Text>
+                <View style={styles.confirmButtons}>
+                  <TouchableOpacity
+                    style={styles.btnDelete}
+                    onPress={handleConfirmDelete}
+                  >
+                    <Text style={styles.btnDeleteText}>Excluir</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.btnSave}
+                    onPress={handleConfirmSave}
+                  >
+                    <Text style={styles.btnSaveText}>Salvar</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </View>
           </Modal>
@@ -280,6 +395,48 @@ const styles = StyleSheet.create({
   userIdSelected: {
     backgroundColor: "#7ec8ff",
     color: "#0a0a1a",
+  },
+  confirmText: {
+    fontSize: 18,
+    fontWeight: "bold",
+    color: "#7ec8ff",
+    marginBottom: 6,
+  },
+  confirmSub: {
+    fontSize: 14,
+    color: "#e0f0ff",
+    textAlign: "center",
+    marginBottom: 20,
+  },
+  confirmButtons: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  btnSave: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: "#7ec8ff",
+    alignItems: "center",
+  },
+  btnSaveText: {
+    color: "#0a0a1a",
+    fontWeight: "bold",
+    fontSize: 16,
+  },
+  btnDelete: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: "#3a1a2a",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#ff6b6b",
+  },
+  btnDeleteText: {
+    color: "#ff6b6b",
+    fontWeight: "bold",
+    fontSize: 16,
   },
   empty: {
     color: "#a8d8ff",
