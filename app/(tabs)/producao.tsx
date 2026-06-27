@@ -1,12 +1,15 @@
 import Button from "@/components/button";
 import Input from "@/components/input";
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { LinearGradient } from "expo-linear-gradient";
-import { useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useState } from "react";
 import {
   Image,
   Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -23,9 +26,26 @@ function formatDate(date: Date) {
   });
 }
 
+type OrdemResumo = {
+  id: string;
+  criadaEm: string;
+  insumos: { produto: string }[];
+  produtosFinal: { produto: string }[];
+};
+
 export default function ProducaoScreen() {
+  const router = useRouter();
   const [date, setDate] = useState(new Date());
   const [showPicker, setShowPicker] = useState(false);
+  const [ordens, setOrdens] = useState<OrdemResumo[]>([]);
+
+  useFocusEffect(
+    useCallback(() => {
+      AsyncStorage.getItem("@orders").then((raw) => {
+        setOrdens(raw ? JSON.parse(raw) : []);
+      });
+    }, []),
+  );
 
   return (
     <LinearGradient
@@ -60,7 +80,11 @@ export default function ProducaoScreen() {
             }}
           />
         )}
-        <View style={styles.content}>
+        <ScrollView
+          style={styles.content}
+          contentContainerStyle={styles.contentContainer}
+          showsVerticalScrollIndicator={false}
+        >
           <Text style={styles.title}>Ordem de Produção</Text>
           <View style={styles.actions}>
             <Input
@@ -72,10 +96,43 @@ export default function ProducaoScreen() {
             <Button
               title="Criar Ordem de Produção"
               icon="add-circle-outline"
-              onPress={() => {}}
+              onPress={() => router.push("/order-production/order")}
             />
           </View>
-        </View>
+
+          {ordens.length > 0 && (
+            <View style={styles.ordensSection}>
+              <Text style={styles.sectionTitle}>Ordens Salvas</Text>
+              {[...ordens].reverse().map((ordem) => (
+                <TouchableOpacity
+                  key={ordem.id}
+                  style={styles.ordemCard}
+                  activeOpacity={0.75}
+                  onPress={() =>
+                    router.push(`/order-production/order?orderId=${ordem.id}`)
+                  }
+                >
+                  <View style={styles.ordemCardLeft}>
+                    <Text style={styles.ordemCardDate}>
+                      {new Date(ordem.criadaEm).toLocaleDateString("pt-BR", {
+                        day: "2-digit",
+                        month: "2-digit",
+                        year: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </Text>
+                    <Text style={styles.ordemCardInfo}>
+                      {ordem.insumos.length} insumo(s) · 
+                      {ordem.produtosFinal.length} produto(s) final
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#7ec8ff" />
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </ScrollView>
       </SafeAreaView>
     </LinearGradient>
   );
@@ -105,9 +162,11 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  contentContainer: {
     alignItems: "center",
-    justifyContent: "flex-start",
     paddingTop: 24,
+    paddingBottom: 32,
   },
   actions: {
     width: "100%",
@@ -122,4 +181,32 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     textAlign: "center",
   },
+  ordensSection: {
+    width: "100%",
+    paddingHorizontal: 28,
+    marginTop: 28,
+    gap: 10,
+  },
+  sectionTitle: {
+    color: "#7ec8ff",
+    fontSize: 13,
+    fontWeight: "600",
+    letterSpacing: 1,
+    marginBottom: 4,
+    textTransform: "uppercase",
+  },
+  ordemCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "rgba(126,200,255,0.08)",
+    borderWidth: 1,
+    borderColor: "rgba(126,200,255,0.2)",
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  ordemCardLeft: { gap: 4 },
+  ordemCardDate: { color: "#d9ecff", fontSize: 13, fontWeight: "600" },
+  ordemCardInfo: { color: "#7ec8ff", fontSize: 12 },
 });

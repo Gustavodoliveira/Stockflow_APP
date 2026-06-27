@@ -1,4 +1,9 @@
-import { getRawOrder, SincOrder } from "@/services/Order";
+import {
+  atualizarStatusInterno,
+  finalizarPedido,
+  getRawOrder,
+  SincOrder,
+} from "@/services/Order";
 import { getAllUsers, UserListItem } from "@/services/UserApi";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -7,9 +12,11 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -24,6 +31,60 @@ export default function SeparacaoScreen() {
   const [pedido, setPedido] = useState<SincOrder | null>(null);
   const [selectedUser, setSelectedUser] = useState<UserListItem | null>(null);
   const [loadingPedido, setLoadingPedido] = useState(true);
+  const [finalizando, setFinalizando] = useState(false);
+
+  type ItemBipeState = {
+    input: string;
+    confirmed: boolean;
+    error: string | null;
+  };
+  const [itemBipe, setItemBipe] = useState<Record<string, ItemBipeState>>({});
+
+  function getBipe(itemId: string): ItemBipeState {
+    return itemBipe[itemId] ?? { input: "", confirmed: false, error: null };
+  }
+
+  function setItemInput(itemId: string, value: string) {
+    setItemBipe((prev) => ({
+      ...prev,
+      [itemId]: { ...getBipe(itemId), input: value, error: null },
+    }));
+  }
+
+  function confirmarBipe(itemId: string, loteSistema: string | undefined) {
+    const current = getBipe(itemId);
+    const valor = current.input.trim();
+    if (!valor) return;
+
+    if (!loteSistema) {
+      setItemBipe((prev) => ({
+        ...prev,
+        [itemId]: {
+          input: "",
+          confirmed: false,
+          error: "Este item não possui lote informado pelo sistema.",
+        },
+      }));
+      return;
+    }
+
+    if (valor.toLowerCase() !== loteSistema.trim().toLowerCase()) {
+      setItemBipe((prev) => ({
+        ...prev,
+        [itemId]: {
+          input: "",
+          confirmed: false,
+          error: `Lote incorreto. Esperado: ${loteSistema}`,
+        },
+      }));
+      return;
+    }
+
+    setItemBipe((prev) => ({
+      ...prev,
+      [itemId]: { input: "", confirmed: true, error: null },
+    }));
+  }
 
   useEffect(() => {
     async function loadPedido() {
@@ -39,6 +100,14 @@ export default function SeparacaoScreen() {
           console.log(JSON.stringify(order.itens[0], null, 2));
         }
         setPedido(order);
+
+        // Ao abrir o pedido, marca statusInterno como "separacao"
+        if (order.statusInterno !== "completo") {
+          try {
+            await atualizarStatusInterno(order.id, "separacao");
+            order.statusInterno = "separacao";
+          } catch {}
+        }
 
         // Se já tem separador, busca os usuários e pré-seleciona
         if (order.userId) {
@@ -66,6 +135,37 @@ export default function SeparacaoScreen() {
 
   async function openUserModal() {
     // seleção feita na tela de pedidos
+  }
+
+  const itenComLote = pedido?.itens.filter((item) => item.lote) ?? [];
+  const todosConfirmados =
+    itenComLote.length > 0 &&
+    itenComLote.every((item) => getBipe(item.id).confirmed);
+
+  async function handleSalvar() {
+    if (!pedido) return;
+    setFinalizando(true);
+    const novoStatus = todosConfirmados ? "completo" : "incompleto";
+    try {
+      await atualizarStatusInterno(pedido.id, novoStatus);
+      setPedido((prev) =>
+        prev ? { ...prev, statusInterno: novoStatus } : prev,
+      );
+      if (todosConfirmados) {
+        await finalizarPedido(pedido.id);
+      }
+      Alert.alert(
+        "Salvo",
+        todosConfirmados
+          ? "Pedido finalizado com todos os lotes confirmados!"
+          : "Progresso salvo. Pedido marcado como incompleto.",
+        [{ text: "OK", onPress: () => router.replace("/(tabs)/pedidos") }],
+      );
+    } catch {
+      Alert.alert("Erro", "Não foi possível salvar. Tente novamente.");
+    } finally {
+      setFinalizando(false);
+    }
   }
 
   function handleUserSelect(_user: UserListItem) {}
@@ -105,7 +205,7 @@ export default function SeparacaoScreen() {
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => router.back()}
+            onPress={() => router.replace("/(tabs)/pedidos")}
             style={styles.backBtn}
           >
             <Ionicons name="arrow-back" size={24} color="#7ec8ff" />
@@ -134,6 +234,29 @@ export default function SeparacaoScreen() {
 
             <Text style={styles.label}>Total</Text>
             <Text style={styles.value}>R$ {pedido.valorTotal}</Text>
+
+            {/* Tag statusInterno */}
+            {pedido.statusInterno && (
+              <View
+                style={[
+                  styles.statusTag,
+                  pedido.statusInterno === "completo" &&
+                    styles.statusTagCompleto,
+                  pedido.statusInterno === "incompleto" &&
+                    styles.statusTagIncompleto,
+                  pedido.statusInterno === "separacao" &&
+                    styles.statusTagSeparacao,
+                ]}
+              >
+                <Text style={styles.statusTagText}>
+                  {pedido.statusInterno === "completo"
+                    ? "Completo"
+                    : pedido.statusInterno === "incompleto"
+                      ? "Incompleto"
+                      : "Em Separação"}
+                </Text>
+              </View>
+            )}
           </View>
 
           {/* Separador */}
@@ -159,23 +282,115 @@ export default function SeparacaoScreen() {
               <Text style={styles.sectionTitle}>
                 Itens ({pedido.itens.length})
               </Text>
-              {pedido.itens.map((item) => (
-                <View key={item.id} style={styles.itemRow}>
-                  <Text style={styles.itemName}>
-                    {item.nomeProduto || `Produto ${item.produto}`}
-                  </Text>
-                  <Text style={styles.itemQtde}>Qtde: {item.qtde}</Text>
-                  <Text style={styles.itemSub}>Lote: {item.lote ?? "-"}</Text>
-                  <Text style={styles.itemSub}>
-                    Validade: {item.dataValidade ?? "-"}
-                  </Text>
-                  <Text style={styles.itemSub}>
-                    Localização: {item.localizacao ?? "-"}
-                  </Text>
-                </View>
-              ))}
+              {pedido.itens.map((item) => {
+                const bipe = getBipe(item.id);
+                return (
+                  <View
+                    key={item.id}
+                    style={[
+                      styles.itemRow,
+                      bipe.confirmed && styles.itemRowConfirmed,
+                      bipe.error != null && styles.itemRowError,
+                    ]}
+                  >
+                    <View style={styles.itemHeader}>
+                      <Text style={styles.itemName}>
+                        {item.nomeProduto || `Produto ${item.produto}`}
+                      </Text>
+                      {bipe.confirmed && (
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={20}
+                          color="#4cff8f"
+                        />
+                      )}
+                      {bipe.error && (
+                        <Ionicons
+                          name="close-circle"
+                          size={20}
+                          color="#ff6b6b"
+                        />
+                      )}
+                    </View>
+                    <Text style={styles.itemQtde}>Qtde: {item.qtde}</Text>
+                    <Text style={styles.itemSub}>Lote: {item.lote ?? "-"}</Text>
+                    <Text style={styles.itemSub}>
+                      Validade: {item.dataValidade ?? "-"}
+                    </Text>
+                    <Text style={styles.itemSub}>
+                      Localização: {item.localizacao ?? "-"}
+                    </Text>
+
+                    {/* Bipagem por item */}
+                    {!bipe.confirmed && (
+                      <View style={styles.bipeRow}>
+                        <TextInput
+                          style={[
+                            styles.bipeInput,
+                            bipe.error != null && styles.bipeInputError,
+                          ]}
+                          placeholder="Bipe o lote..."
+                          placeholderTextColor="#557aa0"
+                          value={bipe.input}
+                          onChangeText={(t) => setItemInput(item.id, t)}
+                          onSubmitEditing={() =>
+                            confirmarBipe(item.id, item.lote)
+                          }
+                          returnKeyType="done"
+                          autoCapitalize="characters"
+                          autoCorrect={false}
+                        />
+                        <TouchableOpacity
+                          style={styles.bipeBtn}
+                          onPress={() => confirmarBipe(item.id, item.lote)}
+                        >
+                          <Ionicons
+                            name="checkmark"
+                            size={22}
+                            color="#0a0a1a"
+                          />
+                        </TouchableOpacity>
+                      </View>
+                    )}
+                    {bipe.error && (
+                      <Text style={styles.bipeError}>{bipe.error}</Text>
+                    )}
+                    {bipe.confirmed && (
+                      <Text style={styles.bipeConfirmed}>Lote confirmado!</Text>
+                    )}
+                  </View>
+                );
+              })}
             </View>
           )}
+          {/* Botão Salvar */}
+          <TouchableOpacity
+            style={[
+              styles.finalizarBtn,
+              todosConfirmados
+                ? styles.finalizarBtnCompleto
+                : styles.finalizarBtnIncompleto,
+            ]}
+            onPress={handleSalvar}
+            disabled={finalizando}
+          >
+            {finalizando ? (
+              <ActivityIndicator color="#0a0a1a" />
+            ) : (
+              <>
+                <Ionicons
+                  name={todosConfirmados ? "checkmark-done" : "save-outline"}
+                  size={22}
+                  color="#0a0a1a"
+                />
+                <Text style={styles.finalizarBtnText}>
+                  {todosConfirmados
+                    ? "Finalizar Pedido"
+                    : `Salvar como Incompleto (${Object.values(itemBipe).filter((b) => b.confirmed).length}/${itenComLote.length} lotes)`}
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
         </ScrollView>
       </SafeAreaView>
     </LinearGradient>
@@ -272,10 +487,124 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "rgba(255,255,255,0.08)",
   },
+  itemRowConfirmed: {
+    backgroundColor: "rgba(76,255,143,0.08)",
+    borderRadius: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: "#4cff8f",
+    paddingLeft: 8,
+  },
+  itemRowError: {
+    backgroundColor: "rgba(255,107,107,0.08)",
+    borderRadius: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: "#ff6b6b",
+    paddingLeft: 8,
+  },
+  itemHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   itemName: {
     fontSize: 15,
     color: "#e0f0ff",
     fontWeight: "600",
+    flex: 1,
+  },
+  bipeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 4,
+  },
+  bipeInput: {
+    flex: 1,
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderWidth: 1,
+    borderColor: "#1a3a8a",
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    color: "#e0f0ff",
+    fontSize: 15,
+  },
+  bipeBtn: {
+    backgroundColor: "#7ec8ff",
+    borderRadius: 10,
+    padding: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bipeInputError: {
+    borderColor: "#ff6b6b",
+  },
+  bipeError: {
+    color: "#ff6b6b",
+    fontSize: 13,
+    marginTop: 6,
+  },
+  bipeConfirmed: {
+    color: "#4cff8f",
+    fontSize: 13,
+    marginTop: 4,
+    fontWeight: "600",
+  },
+  finalizarBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    borderRadius: 14,
+    paddingVertical: 16,
+    marginTop: 8,
+  },
+  finalizarBtnCompleto: {
+    backgroundColor: "#4cff8f",
+  },
+  finalizarBtnIncompleto: {
+    backgroundColor: "#f0a500",
+  },
+  finalizarBtnDisabled: {
+    backgroundColor: "rgba(255,255,255,0.07)",
+    borderWidth: 1,
+    borderColor: "#1a3a8a",
+  },
+  finalizarBtnText: {
+    color: "#0a0a1a",
+    fontWeight: "bold",
+    fontSize: 17,
+  },
+  finalizarBtnTextDisabled: {
+    color: "#557aa0",
+  },
+  statusTag: {
+    alignSelf: "flex-start",
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: "#557aa0",
+  },
+  statusTagCompleto: {
+    borderColor: "#4cff8f",
+    backgroundColor: "rgba(76,255,143,0.12)",
+  },
+  statusTagIncompleto: {
+    borderColor: "#f0a500",
+    backgroundColor: "rgba(240,165,0,0.12)",
+  },
+  statusTagSeparacao: {
+    borderColor: "#7ec8ff",
+    backgroundColor: "rgba(126,200,255,0.12)",
+  },
+  statusTagText: {
+    fontSize: 12,
+    fontWeight: "bold",
+    color: "#e0f0ff",
+    textTransform: "uppercase",
+    letterSpacing: 1,
   },
   itemQtde: {
     fontSize: 13,

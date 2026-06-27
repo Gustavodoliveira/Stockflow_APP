@@ -192,7 +192,12 @@ export default function PedidosScreen() {
                   ]}
                   onPress={() => openUserSelect(item.id)}
                 >
-                  <Text style={styles.userIdText}>
+                  <Text
+                    style={[
+                      styles.userIdText,
+                      separadores[item.id] ? styles.userIdTextSelected : null,
+                    ]}
+                  >
                     {separadores[item.id]
                       ? `Separador: ${getUserNameById(separadores[item.id])}`
                       : "Selecionar Separador"}
@@ -385,7 +390,9 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     paddingHorizontal: 8,
     borderRadius: 8,
-    backgroundColor: "#1a3a8a",
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderColor: "#1a3a8a",
     alignSelf: "flex-start",
   },
   userIdText: {
@@ -393,8 +400,11 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
   userIdSelected: {
-    backgroundColor: "#7ec8ff",
-    color: "#0a0a1a",
+    backgroundColor: "transparent",
+    borderColor: "#7ec8ff",
+  },
+  userIdTextSelected: {
+    color: "#7ec8ff",
   },
   confirmText: {
     fontSize: 18,

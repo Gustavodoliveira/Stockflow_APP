@@ -58,3 +58,16 @@ export function setUserInOrder(orderId: string, userId: string): Promise<void> {
 export function getRawOrder(orderId: string): Promise<SincOrder> {
   return api.get(`/orders/${orderId}`).then((res) => res.data as SincOrder);
 }
+
+export function finalizarPedido(orderId: string): Promise<void> {
+  return api.patch(`/orders/${orderId}/finalizar`).then(() => {});
+}
+
+export function atualizarStatusInterno(
+  orderId: string,
+  statusInterno: string,
+): Promise<void> {
+  return api
+    .patch(`/orders/${orderId}/status-interno`, { statusInterno })
+    .then(() => {});
+}
