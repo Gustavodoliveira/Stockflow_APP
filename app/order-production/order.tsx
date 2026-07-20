@@ -1,7 +1,15 @@
 import Button from "@/components/button";
 import ProdutoLoteModal from "@/components/ProdutoLoteModal";
+import { getUser } from "@/services/auth";
+import {
+  createOrder,
+  deleteOrder,
+  OrderRequest,
+  OrderResponse,
+  OrderStatus,
+  updateOrderStatus,
+} from "@/services/OrderProduction";
 import { Lote, Produto } from "@/services/StockApi";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { LinearGradient } from "expo-linear-gradient";
 import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useState } from "react";
@@ -22,6 +30,9 @@ type Ordem = {
   criadaEm: string;
   insumos: ItemAdicionado[];
   produtosFinal: ItemAdicionado[];
+  status?: OrderStatus;
+  userId?: string;
+  serverOrderId?: string;
 };
 
 function gerarLoteAutomatico(): string {
@@ -32,12 +43,29 @@ function gerarLoteAutomatico(): string {
   return `${dd}${mm}${yy}BRI`;
 }
 
+function getStatusLabel(status?: OrderStatus): string {
+  switch (status) {
+    case OrderStatus.IN_PROGRESS:
+      return "Em produção";
+    case OrderStatus.COMPLETED:
+      return "Concluída";
+    case OrderStatus.CANCELLED:
+      return "Cancelada";
+    default:
+      return "Pendente";
+  }
+}
+
 export default function OrderScreen() {
   const [insumoModal, setInsumoModal] = useState(false);
   const [produtoFinalModal, setProdutoFinalModal] = useState(false);
   const [insumos, setInsumos] = useState<ItemAdicionado[]>([]);
   const [produtosFinal, setProdutosFinal] = useState<ItemAdicionado[]>([]);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [currentStatus, setCurrentStatus] = useState<OrderStatus>(
+    OrderStatus.PENDING,
+  );
   const [editingInsumoIndex, setEditingInsumoIndex] = useState<number | null>(
     null,
   );
@@ -50,15 +78,9 @@ export default function OrderScreen() {
 
   useEffect(() => {
     if (!orderId) return;
-    AsyncStorage.getItem("@orders").then((raw) => {
-      if (!raw) return;
-      const ordens: Ordem[] = JSON.parse(raw);
-      const found = ordens.find((o) => o.id === orderId);
-      if (found) {
-        setInsumos(found.insumos);
-        setProdutosFinal(found.produtosFinal);
-      }
-    });
+    setInsumos([]);
+    setProdutosFinal([]);
+    setCurrentStatus(OrderStatus.PENDING);
   }, [orderId]);
 
   function replaceOrAddItem(
@@ -89,33 +111,63 @@ export default function OrderScreen() {
 
   const canSave = insumos.length > 0 || produtosFinal.length > 0;
 
+  async function handleExcluir() {
+    if (!orderId || deleting) return;
+
+    setDeleting(true);
+    try {
+      await deleteOrder(orderId);
+      router.replace("/(tabs)/producao");
+    } catch (error) {
+      console.warn("Erro ao excluir ordem de produção:", error);
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   async function handleSalvar() {
     if (!canSave || saving) return;
     setSaving(true);
     try {
-      const raw = await AsyncStorage.getItem("@orders");
-      const ordens: Ordem[] = raw ? JSON.parse(raw) : [];
-      if (orderId) {
-        const idx = ordens.findIndex((o) => o.id === orderId);
-        const updated: Ordem = {
-          id: orderId,
-          criadaEm: ordens[idx]?.criadaEm ?? new Date().toISOString(),
-          insumos,
-          produtosFinal,
-        };
-        if (idx !== -1) ordens[idx] = updated;
-        else ordens.push(updated);
-      } else {
-        ordens.push({
-          id: Date.now().toString(),
-          criadaEm: new Date().toISOString(),
-          insumos,
-          produtosFinal,
-        });
+      const user = await getUser();
+      const request: OrderRequest = {
+        userId: user?.id ?? "",
+        productionStatus: currentStatus,
+      };
+
+      let remoteOrder: OrderResponse | null = null;
+      try {
+        if (orderId) {
+          remoteOrder = await updateOrderStatus(orderId, request);
+        } else {
+          remoteOrder = await createOrder(request);
+        }
+      } catch (error) {
+        console.warn("Erro ao sincronizar ordem de produção:", error);
       }
-      await AsyncStorage.setItem("@orders", JSON.stringify(ordens));
+
+      const remoteOrderId =
+        (remoteOrder as (OrderResponse & { id?: string }) | null)?.orderId ??
+        (remoteOrder as (OrderResponse & { id?: string }) | null)?.id ??
+        orderId;
+
+      const nextOrder: Ordem = {
+        id: orderId ?? remoteOrderId ?? `${Date.now()}`,
+        criadaEm: new Date().toISOString(),
+        insumos,
+        produtosFinal,
+        status: remoteOrder?.productionStatus ?? currentStatus,
+        userId: request.userId,
+        serverOrderId: remoteOrderId,
+      };
+
+      if (orderId) {
+        // a ordem já é tratada pelo backend; mantemos apenas o estado local para a tela atual
+      }
       router.replace("/(tabs)/producao");
     } catch {
+      setSaving(false);
+    } finally {
       setSaving(false);
     }
   }
@@ -131,6 +183,15 @@ export default function OrderScreen() {
         <View style={styles.content}>
           <View style={styles.topSection}>
             <Text style={styles.text}>Order number:</Text>
+
+            <View style={styles.statusRow}>
+              <Text style={styles.text}>Status da ordem:</Text>
+              <View style={styles.statusButton}>
+                <Text style={styles.statusButtonText}>
+                  {getStatusLabel(currentStatus)}
+                </Text>
+              </View>
+            </View>
 
             <View style={styles.leftButtonRow}>
               <Button
@@ -173,6 +234,9 @@ export default function OrderScreen() {
               title="Excluir"
               variant="outline"
               style={styles.footerButton}
+              disabled={deleting || !orderId}
+              loading={deleting}
+              onPress={handleExcluir}
             />
             <Button
               title="Salvar"
@@ -285,6 +349,27 @@ const styles = StyleSheet.create({
   topSection: { flex: 1 },
   leftButtonRow: { width: "100%", alignItems: "flex-start", marginTop: 18 },
   inlineButton: { minWidth: 190 },
+  statusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  statusButton: {
+    backgroundColor: "rgba(126, 200, 255, 0.16)",
+    borderColor: "rgba(126, 200, 255, 0.28)",
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  statusButtonText: {
+    color: "#d9ecff",
+    fontSize: 12,
+    fontWeight: "700",
+  },
   listArea: {
     width: "100%",
     backgroundColor: "rgba(10, 10, 26, 0.45)",

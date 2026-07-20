@@ -1,13 +1,20 @@
 import Button from "@/components/button";
 import Input from "@/components/input";
+import {
+  createOrder,
+  getOrderAll,
+  OrderRequest,
+  OrderStatus,
+  updateOrderStatus,
+} from "@/services/OrderProduction";
 import { Ionicons } from "@expo/vector-icons";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { LinearGradient } from "expo-linear-gradient";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 import {
   Image,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -31,21 +38,123 @@ type OrdemResumo = {
   criadaEm: string;
   insumos: { produto: string }[];
   produtosFinal: { produto: string }[];
+  status?: OrderStatus;
+  serverOrderId?: string;
+  userId?: string;
+  userName?: string;
 };
+
+const STATUS_OPTIONS: Array<{ value: OrderStatus; label: string }> = [
+  { value: OrderStatus.PENDING, label: "Pendente" },
+  { value: OrderStatus.IN_PROGRESS, label: "Em produção" },
+  { value: OrderStatus.COMPLETED, label: "Concluída" },
+  { value: OrderStatus.CANCELLED, label: "Cancelada" },
+];
+
+function getStatusLabel(status?: OrderStatus): string {
+  switch (status) {
+    case OrderStatus.IN_PROGRESS:
+      return "Em produção";
+    case OrderStatus.COMPLETED:
+      return "Concluída";
+    case OrderStatus.CANCELLED:
+      return "Cancelada";
+    default:
+      return "Pendente";
+  }
+}
 
 export default function ProducaoScreen() {
   const router = useRouter();
   const [date, setDate] = useState(new Date());
   const [showPicker, setShowPicker] = useState(false);
   const [ordens, setOrdens] = useState<OrdemResumo[]>([]);
+  const [updatingStatusId, setUpdatingStatusId] = useState<string | null>(null);
+  const [showStatusMenu, setShowStatusMenu] = useState(false);
+  const [selectedOrderForStatus, setSelectedOrderForStatus] =
+    useState<OrdemResumo | null>(null);
 
-  useFocusEffect(
-    useCallback(() => {
-      AsyncStorage.getItem("@orders").then((raw) => {
-        setOrdens(raw ? JSON.parse(raw) : []);
-      });
-    }, []),
-  );
+  const carregarOrdens = useCallback(() => {
+    let isActive = true;
+
+    const carregar = async () => {
+      try {
+        const remoteOrders = await getOrderAll().catch(() => []);
+
+        if (!isActive) return;
+
+        const mapped = remoteOrders.map((item) => ({
+          id: item.orderId ?? item.id ?? `${Date.now()}-${Math.random()}`,
+          criadaEm: item.createdAt ?? new Date().toISOString(),
+          insumos: [],
+          produtosFinal: [],
+          status: item.productionStatus ?? OrderStatus.PENDING,
+          serverOrderId: item.orderId ?? item.id,
+          userId: item.userId,
+          userName: item.userName,
+        }));
+
+        setOrdens(mapped);
+      } catch (error) {
+        console.warn("Erro ao carregar ordens de produção:", error);
+        if (!isActive) return;
+        setOrdens([]);
+      }
+    };
+
+    carregar();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
+  useFocusEffect(carregarOrdens);
+
+  async function handleChangeStatus(
+    ordem: OrdemResumo,
+    nextStatus: OrderStatus,
+  ) {
+    setUpdatingStatusId(ordem.id);
+
+    try {
+      const request: OrderRequest = {
+        userId: ordem.userId ?? "",
+        productionStatus: nextStatus,
+      };
+
+      let remoteOrder = null;
+      if (ordem.serverOrderId) {
+        remoteOrder = await updateOrderStatus(ordem.serverOrderId, request);
+      } else {
+        remoteOrder = await createOrder(request);
+      }
+
+      const updatedStatus = remoteOrder?.productionStatus ?? nextStatus;
+      const remoteOrderId =
+        (remoteOrder as { orderId?: string; id?: string } | null)?.orderId ??
+        (remoteOrder as { orderId?: string; id?: string } | null)?.id;
+
+      const updated = ordens.map((item) =>
+        item.id === ordem.id
+          ? {
+              ...item,
+              status: updatedStatus,
+              serverOrderId: remoteOrderId ?? item.serverOrderId,
+              userId: request.userId,
+            }
+          : item,
+      );
+
+      setOrdens(updated);
+      setShowStatusMenu(false);
+      setSelectedOrderForStatus(null);
+    } catch (error) {
+      console.warn("Erro ao atualizar o status da ordem:", error);
+    } finally {
+      setUpdatingStatusId(null);
+    }
+  }
 
   return (
     <LinearGradient
@@ -104,35 +213,98 @@ export default function ProducaoScreen() {
             <View style={styles.ordensSection}>
               <Text style={styles.sectionTitle}>Ordens Salvas</Text>
               {[...ordens].reverse().map((ordem) => (
-                <TouchableOpacity
-                  key={ordem.id}
-                  style={styles.ordemCard}
-                  activeOpacity={0.75}
-                  onPress={() =>
-                    router.push(`/order-production/order?orderId=${ordem.id}`)
-                  }
-                >
-                  <View style={styles.ordemCardLeft}>
-                    <Text style={styles.ordemCardDate}>
-                      {new Date(ordem.criadaEm).toLocaleDateString("pt-BR", {
-                        day: "2-digit",
-                        month: "2-digit",
-                        year: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
+                <View key={ordem.id} style={styles.ordemCard}>
+                  <TouchableOpacity
+                    style={styles.ordemCardContent}
+                    activeOpacity={0.8}
+                    onPress={() =>
+                      router.push(`/order-production/order?orderId=${ordem.id}`)
+                    }
+                  >
+                    <View style={styles.ordemCardLeft}>
+                      <Text style={styles.ordemCardDate}>
+                        {new Date(ordem.criadaEm).toLocaleDateString("pt-BR", {
+                          day: "2-digit",
+                          month: "2-digit",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
+                      </Text>
+                      <Text style={styles.ordemCardInfo}>
+                        ID: {ordem.serverOrderId ?? ordem.id}
+                      </Text>
+                      <Text style={styles.ordemCardInfo}>
+                        Usuário: {ordem.userName || ordem.userId || "-"}
+                      </Text>
+                      <Text style={styles.ordemCardInfo}>
+                        {ordem.insumos.length} insumo(s) ·{" "}
+                        {ordem.produtosFinal.length} produto(s) final
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name="chevron-forward"
+                      size={18}
+                      color="#7ec8ff"
+                    />
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.statusPill}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      setSelectedOrderForStatus(ordem);
+                      setShowStatusMenu(true);
+                    }}
+                    disabled={updatingStatusId === ordem.id}
+                  >
+                    <Text style={styles.statusPillText}>
+                      {updatingStatusId === ordem.id
+                        ? "..."
+                        : getStatusLabel(ordem.status)}
                     </Text>
-                    <Text style={styles.ordemCardInfo}>
-                      {ordem.insumos.length} insumo(s) · 
-                      {ordem.produtosFinal.length} produto(s) final
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color="#7ec8ff" />
-                </TouchableOpacity>
+                  </TouchableOpacity>
+                </View>
               ))}
             </View>
           )}
         </ScrollView>
+
+        <Modal
+          transparent
+          visible={showStatusMenu}
+          animationType="fade"
+          onRequestClose={() => {
+            setShowStatusMenu(false);
+            setSelectedOrderForStatus(null);
+          }}
+        >
+          <TouchableOpacity
+            style={styles.modalOverlay}
+            activeOpacity={1}
+            onPress={() => {
+              setShowStatusMenu(false);
+              setSelectedOrderForStatus(null);
+            }}
+          >
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Alterar status</Text>
+              {STATUS_OPTIONS.map((option) => (
+                <TouchableOpacity
+                  key={option.value}
+                  style={styles.modalOption}
+                  onPress={() => {
+                    if (selectedOrderForStatus) {
+                      handleChangeStatus(selectedOrderForStatus, option.value);
+                    }
+                  }}
+                >
+                  <Text style={styles.modalOptionText}>{option.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </TouchableOpacity>
+        </Modal>
       </SafeAreaView>
     </LinearGradient>
   );
@@ -196,17 +368,67 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   ordemCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
     backgroundColor: "rgba(126,200,255,0.08)",
     borderWidth: 1,
     borderColor: "rgba(126,200,255,0.2)",
     borderRadius: 14,
     paddingVertical: 12,
     paddingHorizontal: 16,
+    gap: 8,
   },
-  ordemCardLeft: { gap: 4 },
+  ordemCardContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  ordemCardLeft: { gap: 4, flex: 1 },
   ordemCardDate: { color: "#d9ecff", fontSize: 13, fontWeight: "600" },
   ordemCardInfo: { color: "#7ec8ff", fontSize: 12 },
+  statusPill: {
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(126, 200, 255, 0.16)",
+    borderColor: "rgba(126, 200, 255, 0.24)",
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  statusPillText: {
+    color: "#d9ecff",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(2, 6, 23, 0.72)",
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 24,
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 320,
+    backgroundColor: "#0f1733",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(126, 200, 255, 0.2)",
+    padding: 16,
+    gap: 8,
+  },
+  modalTitle: {
+    color: "#d9ecff",
+    fontSize: 16,
+    fontWeight: "700",
+    marginBottom: 6,
+  },
+  modalOption: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: "rgba(126, 200, 255, 0.1)",
+  },
+  modalOptionText: {
+    color: "#d9ecff",
+    fontSize: 13,
+  },
 });
