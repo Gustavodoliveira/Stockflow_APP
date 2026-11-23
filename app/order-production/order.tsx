@@ -1,413 +1,185 @@
 import Button from "@/components/button";
 import ProdutoLoteModal from "@/components/ProdutoLoteModal";
-import { getUser } from "@/services/auth";
+import {getUser} from "@/services/auth";
+import {getOrderById, updateOrderStatus, OrderStatus} from "@/services/OrderProduction";
 import {
-  createOrder,
-  deleteOrder,
-  OrderRequest,
-  OrderResponse,
-  OrderStatus,
-  updateOrderStatus,
-} from "@/services/OrderProduction";
-import { Lote, Produto } from "@/services/StockApi";
-import { LinearGradient } from "expo-linear-gradient";
-import { router, useLocalSearchParams } from "expo-router";
-import { useEffect, useState } from "react";
-import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+  createProductionWithItems, getProductionItems, ProductionItem, ProductionItemPayload,
+  createProductionItems, updateProductionItem, removeProductionItem
+} from "@/services/ProductionReports";
+import {Lote,Produto} from "@/services/StockApi";
+import {useLocalSearchParams,useRouter} from "expo-router";
+import {useEffect,useState} from "react";
+import {Alert,ScrollView,StyleSheet,Text,TextInput,TouchableOpacity,View} from "react-native";
+import {SafeAreaView} from "react-native-safe-area-context";
 
-type ItemAdicionado = {
-  produtoId: number;
-  produto: string;
-  loteId: number;
-  lote: string;
-  dataFabricacao: string;
-  dataValidade: string;
-};
-
-type Ordem = {
-  id: string;
-  criadaEm: string;
-  insumos: ItemAdicionado[];
-  produtosFinal: ItemAdicionado[];
-  status?: OrderStatus;
-  userId?: string;
-  serverOrderId?: string;
-};
-
-function gerarLoteAutomatico(): string {
-  const d = new Date();
-  const dd = String(d.getDate()).padStart(2, "0");
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const yy = String(d.getFullYear()).slice(-2);
-  return `${dd}${mm}${yy}BRI`;
-}
-
-function getStatusLabel(status?: OrderStatus): string {
-  switch (status) {
-    case OrderStatus.IN_PROGRESS:
-      return "Em produção";
-    case OrderStatus.COMPLETED:
-      return "Concluída";
-    case OrderStatus.CANCELLED:
-      return "Cancelada";
-    default:
-      return "Pendente";
+type EditedItem = ProductionItemPayload & { id?:string };
+const validIso = (text:string) => /^\d{4}-\d{2}-\d{2}$/.test(text);
+function toIso(text:string):string {
+  if(/^\d{2}\/\d{2}\/\d{4}$/.test(text)) {
+    const [d,m,y]=text.split("/");
+    return `${y}-${m}-${d}`;
   }
+  return text.slice(0,10);
 }
-
+function generatedLot() {
+  const date=new Date();
+  return `${String(date.getDate()).padStart(2,"0")}${String(date.getMonth()+1).padStart(2,"0")}${String(date.getFullYear()).slice(-2)}BRI`;
+}
 export default function OrderScreen() {
-  const [insumoModal, setInsumoModal] = useState(false);
-  const [produtoFinalModal, setProdutoFinalModal] = useState(false);
-  const [insumos, setInsumos] = useState<ItemAdicionado[]>([]);
-  const [produtosFinal, setProdutosFinal] = useState<ItemAdicionado[]>([]);
-  const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [currentStatus, setCurrentStatus] = useState<OrderStatus>(
-    OrderStatus.PENDING,
-  );
-  const [editingInsumoIndex, setEditingInsumoIndex] = useState<number | null>(
-    null,
-  );
-  const [editingProdutoFinalIndex, setEditingProdutoFinalIndex] = useState<
-    number | null
-  >(null);
+  const router=useRouter();
+  const {orderId}=useLocalSearchParams<{orderId?:string}>();
+  const [items,setItems]=useState<EditedItem[]>([]);
+  const [deleted,setDeleted]=useState<string[]>([]);
+  const [status,setStatus]=useState<OrderStatus>(OrderStatus.PENDING);
+  const [modal,setModal]=useState<"Input"|"Output"|null>(null);
+  const [editing,setEditing]=useState<number|null>(null);
+  const [qty,setQty]=useState("1");
+  const [weight,setWeight]=useState("1");
+  const [saving,setSaving]=useState(false);
+  const [loading,setLoading]=useState(!!orderId);
 
-  const loteAutomatico = gerarLoteAutomatico();
-  const { orderId } = useLocalSearchParams<{ orderId?: string }>();
+  useEffect(()=>{
+    if(!orderId)return;
+    let active=true;
+    Promise.all([getProductionItems(orderId),getOrderById(orderId)])
+      .then(([it,order])=>{
+        if(!active)return;
+        setItems(it.map(({id,orderId:_,...item})=>({...item,id})));
+        setStatus(order.productionStatus);
+      })
+      .catch(()=>{if(active)Alert.alert("Erro","Não foi possível carregar a ordem.");})
+      .finally(()=>{if(active)setLoading(false);});
+    return ()=>{active=false;};
+  },[orderId]);
 
-  useEffect(() => {
-    if (!orderId) return;
-    setInsumos([]);
-    setProdutosFinal([]);
-    setCurrentStatus(OrderStatus.PENDING);
-  }, [orderId]);
-
-  function replaceOrAddItem(
-    setter: React.Dispatch<React.SetStateAction<ItemAdicionado[]>>,
-    editIndex: number | null,
-    produto: Produto,
-    lote: Lote,
-    dataFabricacao: string,
-    dataValidade: string,
-  ) {
-    const newItem: ItemAdicionado = {
-      produtoId: produto.id,
-      produto: produto.descricao,
-      loteId: lote.id,
-      lote: lote.identificacao,
-      dataFabricacao,
-      dataValidade,
+  function addProduct(product:Produto,lot:Lote,fab:string,val:string) {
+    const quantity=Number(qty.replace(",","."));
+    const unitWeight=Number(weight.replace(",","."));
+    const fabrication=toIso(fab), validity=toIso(val);
+    if(!Number.isFinite(quantity)||quantity<=0||!Number.isFinite(unitWeight)||unitWeight<=0||
+       !validIso(fabrication)||!validIso(validity)) {
+      Alert.alert("Dados inválidos","Informe quantidade e peso positivos e datas válidas.");return;
+    }
+    const existing=editing===null?undefined:items[editing];
+    const next:EditedItem={
+      id:existing?.id,itemType:modal??"Input",externalProductId:String(product.id),
+      productName:product.descricao,unit:product.unidadeMedida||"KG",
+      quantity,unitWeight,lot:lot.identificacao,
+      externalLotId:lot.id||null,dateFabrication:fabrication,dateValidity:validity
     };
-    setter((current) => {
-      if (editIndex !== null) {
-        const updated = [...current];
-        updated[editIndex] = newItem;
-        return updated;
-      }
-      return [...current, newItem];
-    });
+    setItems(prev=>editing===null?[...prev,next]:prev.map((v,i)=>i===editing?next:v));
+    setModal(null);setEditing(null);setQty("1");setWeight("1");
   }
-
-  const canSave = insumos.length > 0 || produtosFinal.length > 0;
-
-  async function handleExcluir() {
-    if (!orderId || deleting) return;
-
-    setDeleting(true);
-    try {
-      await deleteOrder(orderId);
-      router.replace("/(tabs)/producao");
-    } catch (error) {
-      console.warn("Erro ao excluir ordem de produção:", error);
-    } finally {
-      setDeleting(false);
+  function editItem(i:number) {
+    setEditing(i);setQty(String(items[i].quantity));setWeight(String(items[i].unitWeight));
+    setModal(items[i].itemType);
+  }
+  function deleteItem(i:number) {
+    const target=items[i];
+    if(target.id)setDeleted(prev=>[...prev,target.id!]);
+    setItems(prev=>prev.filter((_,index)=>i!==index));
+  }
+  async function save() {
+    if(saving||loading||items.length===0) {
+      if(items.length===0)Alert.alert("Adicione um produto","É necessário informar ao menos um item.");
+      return;
     }
-  }
-
-  async function handleSalvar() {
-    if (!canSave || saving) return;
     setSaving(true);
-    try {
-      const user = await getUser();
-      const request: OrderRequest = {
-        userId: user?.id ?? "",
-        productionStatus: currentStatus,
-      };
-
-      let remoteOrder: OrderResponse | null = null;
-      try {
-        if (orderId) {
-          remoteOrder = await updateOrderStatus(orderId, request);
-        } else {
-          remoteOrder = await createOrder(request);
+    try{
+      const user=await getUser();
+      if(!user?.id) throw new Error("Usuário não autenticado.");
+      let id=orderId;
+      if (!id) {
+        const created=await createProductionWithItems(user.id,status,items.map(({id:_,...item})=>item));
+        id=created.id;
+      } else {
+        await updateOrderStatus(id,{userId:user.id,productionStatus:status});
+        for(const item of items) {
+          if(item.id) await updateProductionItem({...item,id:item.id,orderId:id});
+          else await createProductionItems([{...item,orderId:id}]);
         }
-      } catch (error) {
-        console.warn("Erro ao sincronizar ordem de produção:", error);
+        for(const itemId of deleted) await removeProductionItem(itemId);
       }
-
-      const remoteOrderId =
-        (remoteOrder as (OrderResponse & { id?: string }) | null)?.orderId ??
-        (remoteOrder as (OrderResponse & { id?: string }) | null)?.id ??
-        orderId;
-
-      const nextOrder: Ordem = {
-        id: orderId ?? remoteOrderId ?? `${Date.now()}`,
-        criadaEm: new Date().toISOString(),
-        insumos,
-        produtosFinal,
-        status: remoteOrder?.productionStatus ?? currentStatus,
-        userId: request.userId,
-        serverOrderId: remoteOrderId,
-      };
-
-      if (orderId) {
-        // a ordem já é tratada pelo backend; mantemos apenas o estado local para a tela atual
-      }
-      router.replace("/(tabs)/producao");
-    } catch {
-      setSaving(false);
-    } finally {
-      setSaving(false);
-    }
+      router.replace({pathname:"/order-production/reports",params:{orderId:id}});
+    }catch(error) {
+      Alert.alert("Erro ao salvar",error instanceof Error?error.message:"Verifique sua conexão e tente novamente.");
+    }finally{setSaving(false);}
   }
-
-  return (
-    <LinearGradient
-      colors={["#0a0a1a", "#0d0d3b", "#1a0a4a", "#2d0a6e", "#1a3a8a"]}
-      start={{ x: 0, y: 0 }}
-      end={{ x: 1, y: 1 }}
-      style={styles.gradient}
-    >
-      <SafeAreaView style={styles.container} edges={["top", "left", "right"]}>
-        <View style={styles.content}>
-          <View style={styles.topSection}>
-            <Text style={styles.text}>Order number:</Text>
-
-            <View style={styles.statusRow}>
-              <Text style={styles.text}>Status da ordem:</Text>
-              <View style={styles.statusButton}>
-                <Text style={styles.statusButtonText}>
-                  {getStatusLabel(currentStatus)}
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.leftButtonRow}>
-              <Button
-                title="Adicionar Insumo"
-                style={styles.inlineButton}
-                onPress={() => setInsumoModal(true)}
-              />
-            </View>
-
-            <ItemList
-              items={insumos}
-              emptyText="Os insumos adicionados podem aparecer aqui."
-              onEdit={(index) => {
-                setEditingInsumoIndex(index);
-                setInsumoModal(true);
-              }}
-            />
-
-            <View style={styles.productSection}>
-              <View style={styles.leftButtonRow}>
-                <Button
-                  title="Adicionar Produto Final"
-                  style={styles.inlineButton}
-                  onPress={() => setProdutoFinalModal(true)}
-                />
-              </View>
-              <ItemList
-                items={produtosFinal}
-                emptyText="O produto final pode aparecer abaixo deste botão."
-                onEdit={(index) => {
-                  setEditingProdutoFinalIndex(index);
-                  setProdutoFinalModal(true);
-                }}
-              />
-            </View>
-          </View>
-
-          <View style={styles.bottomActions}>
-            <Button
-              title="Excluir"
-              variant="outline"
-              style={styles.footerButton}
-              disabled={deleting || !orderId}
-              loading={deleting}
-              onPress={handleExcluir}
-            />
-            <Button
-              title="Salvar"
-              style={styles.footerButton}
-              disabled={!canSave}
-              loading={saving}
-              onPress={handleSalvar}
-            />
-          </View>
+  const renderGroup=(type:"Input"|"Output",label:string)=> <View style={styles.section}>
+    <Text style={styles.label}>{label}</Text>
+    {items.map((item,i)=>item.itemType!==type?null:<View key={item.id??i} style={styles.item}>
+      <TouchableOpacity style={{flex:1}} onPress={()=>editItem(i)}>
+        <Text style={styles.itemName}>{item.productName}</Text>
+        <Text style={styles.muted}>Código {item.externalProductId} · {item.quantity} {item.unit} · Peso {item.unitWeight}</Text>
+        <Text style={styles.muted}>Lote {item.lot} · Fab {item.dateFabrication} · Val {item.dateValidity}</Text>
+      </TouchableOpacity>
+      <TouchableOpacity onPress={()=>deleteItem(i)}><Text style={styles.delete}>Excluir</Text></TouchableOpacity>
+    </View>)}
+    <TouchableOpacity style={styles.outline} onPress={()=>{setEditing(null);setQty("1");setWeight("1");setModal(type);}}>
+      <Text style={styles.add}>+ Adicionar {type==="Input"?"insumo":"produto final"}</Text>
+    </TouchableOpacity>
+  </View>;
+  return <SafeAreaView style={styles.screen}>
+    <ScrollView contentContainerStyle={styles.content}>
+      <TouchableOpacity onPress={()=>router.back()}><Text style={styles.add}>‹ Voltar</Text></TouchableOpacity>
+      <Text style={styles.title}>{orderId?"Editar Ordem":"Nova Ordem de Produção"}</Text>
+      <Text style={styles.muted}>{orderId?`ID: ${orderId}`:"A numeração será gerada automaticamente."}</Text>
+      <Text style={styles.label}>Status</Text>
+      <View style={styles.statusRow}>
+        {Object.values(OrderStatus).map(option=><TouchableOpacity key={option}
+          style={[styles.status,status===option&&styles.statusSelected]} onPress={()=>setStatus(option)}>
+          <Text style={styles.statusText}>{option==="IN_PROGRESS"?"EM PRODUÇÃO":option==="PENDING"?"PENDENTE":option==="COMPLETED"?"CONCLUÍDA":"CANCELADA"}</Text>
+        </TouchableOpacity>)}
+      </View>
+      {loading?<Text style={styles.muted}>Carregando itens...</Text>:<>
+        {renderGroup("Input","Insumos")}
+        {renderGroup("Output","Produtos finais")}
+        <TouchableOpacity disabled={saving} style={styles.button} onPress={save}>
+          <Text style={styles.buttonText}>{saving?"Salvando...":"Salvar e preencher documentos"}</Text>
+        </TouchableOpacity>
+        {!!orderId&&<TouchableOpacity style={styles.outline} onPress={()=>router.push({pathname:"/order-production/reports",params:{orderId}})}>
+          <Text style={styles.add}>Abrir documentos e PDFs</Text>
+        </TouchableOpacity>}
+      </>}
+    </ScrollView>
+    <ProdutoLoteModal visible={modal!==null} title={editing===null?"Adicionar produto":"Editar produto"}
+      autoLote={modal==="Output"?generatedLot():undefined} manualDates={modal==="Output"}
+      onClose={()=>{setModal(null);setEditing(null);}}
+      onConfirm={addProduct}/>
+    {modal!==null&&<View style={styles.quantityOverlay} pointerEvents="box-none">
+      <View style={styles.quantityBox}>
+        <Text style={styles.label}>Quantidade e peso unitário</Text>
+        <View style={styles.qtyRow}>
+          <TextInput style={styles.qtyInput} keyboardType="decimal-pad" value={qty}
+            onChangeText={setQty} placeholder="Quantidade" placeholderTextColor="#aaa"/>
+          <TextInput style={styles.qtyInput} keyboardType="decimal-pad" value={weight}
+            onChangeText={setWeight} placeholder="Peso unitário" placeholderTextColor="#aaa"/>
         </View>
-
-        <ProdutoLoteModal
-          visible={insumoModal}
-          title={
-            editingInsumoIndex !== null ? "Editar Insumo" : "Buscar Insumo"
-          }
-          onClose={() => {
-            setInsumoModal(false);
-            setEditingInsumoIndex(null);
-          }}
-          onConfirm={(p, l, fab, val) => {
-            replaceOrAddItem(setInsumos, editingInsumoIndex, p, l, fab, val);
-            setInsumoModal(false);
-            setEditingInsumoIndex(null);
-          }}
-        />
-
-        <ProdutoLoteModal
-          visible={produtoFinalModal}
-          title={
-            editingProdutoFinalIndex !== null
-              ? "Editar Produto Final"
-              : "Buscar Produto Final"
-          }
-          autoLote={loteAutomatico}
-          manualDates
-          onClose={() => {
-            setProdutoFinalModal(false);
-            setEditingProdutoFinalIndex(null);
-          }}
-          onConfirm={(p, l, fab, val) => {
-            replaceOrAddItem(
-              setProdutosFinal,
-              editingProdutoFinalIndex,
-              p,
-              l,
-              fab,
-              val,
-            );
-            setProdutoFinalModal(false);
-            setEditingProdutoFinalIndex(null);
-          }}
-        />
-      </SafeAreaView>
-    </LinearGradient>
-  );
+        <Text style={styles.muted}>Esses valores serão aplicados ao produto selecionado.</Text>
+      </View>
+    </View>}
+  </SafeAreaView>;
 }
-
-function formatDate(iso: string): string {
-  if (!iso) return "-";
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(iso)) return iso;
-  try {
-    return new Date(iso).toLocaleDateString("pt-BR");
-  } catch {
-    return iso;
-  }
-}
-
-function ItemList({
-  items,
-  emptyText,
-  onEdit,
-}: {
-  items: ItemAdicionado[];
-  emptyText: string;
-  onEdit: (index: number) => void;
-}) {
-  return (
-    <View style={styles.listArea}>
-      {items.length === 0 ? (
-        <Text style={styles.helperText}>{emptyText}</Text>
-      ) : (
-        <View style={styles.itemsList}>
-          {items.map((item, index) => (
-            <TouchableOpacity
-              key={`${item.produtoId}-${item.loteId}-${index}`}
-              style={styles.itemCard}
-              onPress={() => onEdit(index)}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.itemTitle} numberOfLines={1}>
-                {item.produto}
-              </Text>
-              <Text style={styles.itemSubtitle}>
-                Lote: {item.lote} · Fab: {formatDate(item.dataFabricacao)} ·
-                Val: {formatDate(item.dataValidade)}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      )}
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  gradient: { flex: 1 },
-  container: { flex: 1 },
-  content: { flex: 1, paddingHorizontal: 24, paddingTop: 32 },
-  topSection: { flex: 1 },
-  leftButtonRow: { width: "100%", alignItems: "flex-start", marginTop: 18 },
-  inlineButton: { minWidth: 190 },
-  statusRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-    marginTop: 12,
-    marginBottom: 4,
-  },
-  statusButton: {
-    backgroundColor: "rgba(126, 200, 255, 0.16)",
-    borderColor: "rgba(126, 200, 255, 0.28)",
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  statusButtonText: {
-    color: "#d9ecff",
-    fontSize: 12,
-    fontWeight: "700",
-  },
-  listArea: {
-    width: "100%",
-    backgroundColor: "rgba(10, 10, 26, 0.45)",
-    borderWidth: 1,
-    borderColor: "rgba(126, 200, 255, 0.2)",
-    borderRadius: 18,
-    padding: 20,
-    marginTop: 16,
-    minHeight: 150,
-    justifyContent: "center",
-  },
-  productSection: { marginTop: 36 },
-  text: { color: "#d9ecff", fontSize: 16, lineHeight: 24, textAlign: "left" },
-  helperText: {
-    color: "#7ec8ff",
-    fontSize: 15,
-    lineHeight: 22,
-    textAlign: "left",
-  },
-  itemsList: { gap: 6 },
-  itemCard: {
-    backgroundColor: "rgba(126, 200, 255, 0.08)",
-    borderWidth: 1,
-    borderColor: "rgba(126, 200, 255, 0.18)",
-    borderRadius: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-  },
-  itemTitle: { color: "#d9ecff", fontSize: 13, fontWeight: "700" },
-  itemSubtitle: { color: "#7ec8ff", fontSize: 11, marginTop: 3 },
-  bottomActions: {
-    width: "100%",
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 16,
-    paddingTop: 20,
-    paddingBottom: 20,
-  },
-  footerButton: { minWidth: 140 },
+const styles=StyleSheet.create({
+  screen:{flex:1,backgroundColor:"#0a0a1a"},
+  content:{padding:20,gap:15,paddingBottom:64},
+  title:{color:"#d9ecff",fontSize:24,fontWeight:"800"},
+  muted:{color:"#8bb4da",fontSize:12,marginTop:3},
+  label:{color:"#a8d8ff",fontWeight:"700",fontSize:15},
+  section:{gap:9,marginTop:14},
+  statusRow:{flexDirection:"row",flexWrap:"wrap",gap:7},
+  status:{padding:9,backgroundColor:"#223052",borderRadius:7},
+  statusSelected:{backgroundColor:"#386ebd"},
+  statusText:{fontSize:10,color:"#fff",fontWeight:"700"},
+  item:{padding:12,backgroundColor:"#17264a",borderRadius:9,flexDirection:"row",alignItems:"center",gap:8},
+  itemName:{color:"#fff",fontWeight:"700",fontSize:13},
+  delete:{color:"#ff9292",fontWeight:"700",fontSize:12},
+  outline:{borderColor:"#467cb5",borderWidth:1,padding:13,alignItems:"center",borderRadius:9},
+  add:{color:"#9edaff",fontWeight:"700",fontSize:14},
+  button:{backgroundColor:"#386ebd",padding:15,alignItems:"center",borderRadius:9},
+  buttonText:{color:"#fff",fontWeight:"700"},
+  quantityOverlay:{position:"absolute",bottom:0,left:0,right:0,pointerEvents:"box-none"},
+  quantityBox:{backgroundColor:"#101c3a",padding:10,borderTopColor:"#467cb5",borderTopWidth:1},
+  qtyRow:{flexDirection:"row",gap:10},
+  qtyInput:{flex:1,backgroundColor:"#23375f",borderRadius:8,padding:9,color:"#fff"},
 });
