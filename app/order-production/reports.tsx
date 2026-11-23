@@ -92,7 +92,7 @@ export default function ProductionReportsScreen() {
     if (!orderId || busy) return;
     setBusy(true);
     try {
-      for(const item of qualityItems) {
+      for(const item of displayedQuality) {
         if(quality[item.id]) await saveQualityCheck(orderId,item.id,quality[item.id]);
       }
       Alert.alert("Salvo","Avaliações de qualidade atualizadas.");
