@@ -145,19 +145,8 @@ export default function OrderScreen() {
     <ProdutoLoteModal visible={modal!==null} title={editing===null?"Adicionar produto":"Editar produto"}
       autoLote={modal==="Output"?generatedLot():undefined} manualDates={modal==="Output"}
       onClose={()=>{setModal(null);setEditing(null);}}
-      onConfirm={addProduct}/>
-    {modal!==null&&<View style={styles.quantityOverlay} pointerEvents="box-none">
-      <View style={styles.quantityBox}>
-        <Text style={styles.label}>Quantidade e peso unitário</Text>
-        <View style={styles.qtyRow}>
-          <TextInput style={styles.qtyInput} keyboardType="decimal-pad" value={qty}
-            onChangeText={setQty} placeholder="Quantidade" placeholderTextColor="#aaa"/>
-          <TextInput style={styles.qtyInput} keyboardType="decimal-pad" value={weight}
-            onChangeText={setWeight} placeholder="Peso unitário" placeholderTextColor="#aaa"/>
-        </View>
-        <Text style={styles.muted}>Esses valores serão aplicados ao produto selecionado.</Text>
-      </View>
-    </View>}
+      onConfirm={addProduct} quantity={qty} unitWeight={weight}
+      onQuantityChange={setQty} onUnitWeightChange={setWeight}/>
   </SafeAreaView>;
 }
 const styles=StyleSheet.create({
