@@ -37,6 +37,10 @@ type Props = {
   title: string;
   manualDates?: boolean;
   autoLote?: string;
+  quantity?: string;
+  unitWeight?: string;
+  onQuantityChange?: (v:string)=>void;
+  onUnitWeightChange?: (v:string)=>void;
   onClose: () => void;
   onConfirm: (
     produto: Produto,
@@ -51,6 +55,10 @@ export default function ProdutoLoteModal({
   title,
   manualDates = false,
   autoLote = "",
+  quantity,
+  unitWeight,
+  onQuantityChange,
+  onUnitWeightChange,
   onClose,
   onConfirm,
 }: Props) {
@@ -320,6 +328,20 @@ export default function ProdutoLoteModal({
               </View>
             )}
 
+            {onQuantityChange && onUnitWeightChange && (
+              <View style={styles.datesRow}>
+                <View style={styles.dateItem}>
+                  <Text style={styles.label}>Quantidade</Text>
+                  <Input placeholder="Ex.: 10" keyboardType="decimal-pad"
+                    value={quantity??""} onChangeText={onQuantityChange}/>
+                </View>
+                <View style={styles.dateItem}>
+                  <Text style={styles.label}>Peso unitário</Text>
+                  <Input placeholder="Ex.: 1" keyboardType="decimal-pad"
+                    value={unitWeight??""} onChangeText={onUnitWeightChange}/>
+                </View>
+              </View>
+            )}
             <Text style={styles.hint}>
               Selecione um produto e um lote do estoque para adicionar.
             </Text>

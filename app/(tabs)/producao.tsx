@@ -251,6 +251,16 @@ export default function ProducaoScreen() {
 
                   <TouchableOpacity
                     style={styles.statusPill}
+                    onPress={() => router.push({
+                      pathname: "/order-production/reports",
+                      params: { orderId: ordem.serverOrderId ?? ordem.id }
+                    })}
+                  >
+                    <Text style={styles.statusPillText}>Preencher / Baixar PDFs</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.statusPill}
                     activeOpacity={0.8}
                     onPress={() => {
                       setSelectedOrderForStatus(ordem);
