@@ -73,9 +73,9 @@ export async function getQualityChecks(id:string): Promise<QualityCheck[]> {
 export async function saveQualityCheck(orderId:string, itemId:string, values:QualityPayload) {
   return api.put(`/order-production/${orderId}/quality-checks/${itemId}`,values);
 }
-export async function downloadProductionPdf(orderId:string, kind:"production"|"quality") {
-  const name = kind === "production" ? "ordem-producao" : "fracionamento";
-  const suffix = kind === "production" ? "pdf" : "quality-pdf";
+export async function downloadProductionPdf(orderId:string) {
+  const name = "ordem-completa";
+  const suffix = "pdf";
   const url = `${api.defaults.baseURL?.replace(/\/$/,"")}/order-production/${orderId}/${suffix}`;
   const token = await getToken();
   if (!token) throw new Error("Sessão expirada. Entre novamente.");
