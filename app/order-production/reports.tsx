@@ -99,10 +99,10 @@ export default function ProductionReportsScreen() {
     }catch(e){Alert.alert("Erro ao salvar",errorMessage(e));}
     finally{setBusy(false);}
   }
-  async function download(kind:"production"|"quality") {
+  async function download() {
     if (!orderId || busy) return;
     setBusy(true);
-    try {await downloadProductionPdf(orderId,kind);}
+    try {await downloadProductionPdf(orderId);}
     catch(e){Alert.alert("Erro ao baixar",errorMessage(e));}
     finally{setBusy(false);}
   }
@@ -151,9 +151,6 @@ export default function ProductionReportsScreen() {
         <TouchableOpacity style={styles.button} disabled={busy} onPress={saveDetails}>
           <Text style={styles.buttonText}>{busy?"Salvando...":"Salvar cabeçalho"}</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.secondaryButton} disabled={busy} onPress={()=>download("production")}>
-          <Text style={styles.buttonText}>Baixar Ordem de Produção (PDF)</Text>
-        </TouchableOpacity>
       </> : <>
         <Text style={styles.section}>Avaliação dos produtos</Text>
         {displayedQuality.length===0?<Text style={styles.note}>Adicione produtos na ordem para registrar a avaliação.</Text>:
@@ -175,10 +172,10 @@ export default function ProductionReportsScreen() {
         <TouchableOpacity style={styles.button} disabled={busy} onPress={saveQuality}>
           <Text style={styles.buttonText}>{busy?"Salvando...":"Salvar avaliação"}</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.secondaryButton} disabled={busy} onPress={()=>download("quality")}>
-          <Text style={styles.buttonText}>Baixar Controle de Fracionamento (PDF)</Text>
-        </TouchableOpacity>
       </>}
+      {!loading && <TouchableOpacity style={styles.secondaryButton} disabled={busy} onPress={download}>
+        <Text style={styles.buttonText}>Baixar PDF completo (Ordem + Fracionamento)</Text>
+      </TouchableOpacity>}
     </ScrollView>
   </SafeAreaView>;
 }
